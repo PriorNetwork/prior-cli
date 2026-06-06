@@ -1,5 +1,8 @@
 # Changelog
 
+## [1.7.10] - 2026-06-07
+- Updated repository URLs to the new `PriorNetwork/prior-cli` GitHub org (repo moved)
+
 ## [1.7.9] - 2026-06-07
 - `generate_image` now pre-generates its caption before queuing the render (Ollama gets killed for VRAM right after), so the description appears immediately instead of waiting on the restart cycle
 - `generate_image` falls back to the Downloads folder when the working directory needs elevated permissions (e.g. `C:\Windows\System32`) instead of failing with EPERM
