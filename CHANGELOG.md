@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.7.9] - 2026-06-07
+- `generate_image` now pre-generates its caption before queuing the render (Ollama gets killed for VRAM right after), so the description appears immediately instead of waiting on the restart cycle
+- `generate_image` falls back to the Downloads folder when the working directory needs elevated permissions (e.g. `C:\Windows\System32`) instead of failing with EPERM
+- Declining a tool confirmation (y/n) now reliably stops the agent — it no longer retries or rephrases the same declined action
+
 ## [1.7.8] - 2026-04-07
 - Updated all backend URLs to priornetwork.com (migrated from ngrok to Cloudflare Tunnel)
 

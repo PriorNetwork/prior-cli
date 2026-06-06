@@ -1,12 +1,12 @@
 {
   "name": "prior-cli",
-  "version": "1.7.8",
+  "version": "1.7.9",
   "description": "Prior Network AI — command-line interface",
   "author": "Prior Network",
   "homepage": "https://priornetwork.com",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Niceguygamer/prior-cli.git"
+    "url": "git+https://github.com/Niceguygamer/prior-cli.git"
   },
   "bugs": {
     "url": "https://github.com/Niceguygamer/prior-cli/issues"
