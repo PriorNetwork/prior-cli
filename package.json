@@ -1,7 +1,7 @@
 {
   "name": "prior-cli",
-  "version": "1.7.14",
-  "description": "Prior Network AI — command-line interface",
+  "version": "1.7.15",
+  "description": "Agentic AI in your terminal — write & edit code, search your codebase, research the web, run commands, generate images, and automate Prior services.",
   "author": "Prior Network",
   "homepage": "https://priornetwork.com",
   "repository": {
@@ -30,7 +30,14 @@
   "keywords": [
     "prior",
     "ai",
-    "cli"
+    "cli",
+    "agent",
+    "agentic",
+    "ai-agent",
+    "coding-assistant",
+    "terminal",
+    "llm",
+    "chatbot"
   ],
   "license": "MIT",
   "files": [

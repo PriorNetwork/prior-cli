@@ -1,5 +1,8 @@
 # Changelog
 
+## [1.7.15] - 2026-06-07
+- Docs: repositioned Prior CLI as an agentic AI assistant (code, search, research, automate) across the README, npm description, and keywords — and documented surgical edits, codebase search, `@file` attachments, one-shot `prior run`, and the standalone exe
+
 ## [1.7.14] - 2026-06-07
 - **Standalone Windows executable** — `prior.exe` is now available from GitHub Releases, so users can run Prior without installing Node.js
 - **Self-updating exe** — `/update` (and `prior update`) detect when running as the standalone exe and update in place by downloading the latest release, instead of going through npm
