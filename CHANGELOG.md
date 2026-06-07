@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.7.13] - 2026-06-07
+- **`@file` autocomplete is now a real interactive picker** — ↑/↓ moves a highlighted selection, Enter/Tab inserts the path, Esc dismisses, and typing filters live (it takes over the keyboard while open so arrow keys no longer fall through to shell history)
+- Lists **files and folders together, alphabetically** (was folders-only when a directory had many subfolders); selecting a folder drills into it
+- **Scrolling viewport** — shows 8 rows at a time with a position counter and scrolls through every match instead of capping the list
+- Fixed the dropdown overlapping the input line when the prompt sits near the bottom of the terminal (now uses scroll-safe relative cursor positioning)
+
 ## [1.7.12] - 2026-06-07
 - **`@file` live autocomplete** — typing `@` now shows a dropdown of matching files/folders (dirs first, skips node_modules/dotfiles) and Tab completes the path, mirroring the slash-command menu
 

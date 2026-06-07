@@ -231,9 +231,9 @@ function expandFileRefs(input, cwd) {
 }
 
 // Live completions for an @file token being typed. `partial` is the text
-// after @ (e.g. "lib/to").  Returns up to `limit` matches, dirs first.
+// after @ (e.g. "lib/to").  Returns up to `limit` matches, alphabetical (files + folders mixed).
 const REF_SKIP_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', '.cache', 'coverage', 'vendor']);
-function fileRefSuggestions(partial, cwd, limit = 6) {
+function fileRefSuggestions(partial, cwd, limit = 10) {
   const slash   = Math.max(partial.lastIndexOf('/'), partial.lastIndexOf('\\'));
   const dirPart = slash >= 0 ? partial.slice(0, slash) : '';
   const prefix  = (slash >= 0 ? partial.slice(slash + 1) : partial).toLowerCase();
@@ -250,7 +250,7 @@ function fileRefSuggestions(partial, cwd, limit = 6) {
     const ref = (dirPart ? dirPart.replace(/\\/g, '/') + '/' : '') + e.name;
     out.push({ ref, isDir: e.isDirectory() });
   }
-  out.sort((a, b) => (a.isDir === b.isDir ? a.ref.localeCompare(b.ref) : a.isDir ? -1 : 1));
+  out.sort((a, b) => a.ref.toLowerCase().localeCompare(b.ref.toLowerCase())); // alphabetical, files + folders mixed
   return out.slice(0, limit);
 }
 
@@ -1003,22 +1003,6 @@ async function startChat(opts = {}) {
         }
       }
 
-      // @file completions — when the token at the end of the line starts with @
-      const atMatch = (line || '').match(/(?:^|\s)@([^\s]*)$/);
-      if (atMatch) {
-        const sugg = fileRefSuggestions(atMatch[1], process.cwd());
-        for (const s of sugg) {
-          const label = s.isDir ? s.ref + '/' : s.ref;
-          const icon  = s.isDir ? '📁' : '📄';
-          process.stdout.write(`\x1b[B\r\x1b[2K  ${c.brand('@')}${c.white(label.padEnd(30))}${c.dim(icon)}`);
-          rows++;
-        }
-        if (sugg.length) {
-          process.stdout.write(`\x1b[B\r\x1b[2K  ${c.dim('tab to complete  ·  attaches file contents as context')}`);
-          rows++;
-        }
-      }
-
       process.stdout.write('\x1b[u');
       _subRowCount = rows;
     }
@@ -1030,6 +1014,158 @@ async function startChat(opts = {}) {
       process.stdout.write(`\x1b[B\r\x1b[2K  ${msg}`);
       process.stdout.write('\x1b[u');
       _subRowCount = 1;
+    }
+
+    // ── Interactive @file picker ─────────────────────────────────
+    // While open, it OWNS the keyboard (↑/↓/Enter/Tab/Esc/typing) so the
+    // arrow keys don't fall through to readline's history. We swap readline's
+    // keypress listener out for ours, then restore it when the picker closes.
+    let _atActive = false;
+    let _atItems  = [];
+    let _atSel    = 0;
+    let _atToken  = '';
+    let _atStart  = 0;
+    let _savedKp  = null;
+    let _atRows   = 0;   // rows currently drawn below the input by the picker
+    let _atView   = 0;   // index of the first visible item (scrolling viewport)
+    const AT_MAX_VISIBLE = 8;
+
+    function currentAtToken() {
+      const line   = rl.line || '';
+      const before = line.slice(0, rl.cursor);
+      const m = before.match(/(?:^|\s)@([^\s]*)$/);
+      if (!m) return null;
+      return { token: m[1], start: rl.cursor - m[1].length - 1 };
+    }
+
+    function refreshAtItems() {
+      const t = currentAtToken();
+      if (!t) return false;
+      _atToken = t.token;
+      _atStart = t.start;
+      _atItems = fileRefSuggestions(_atToken, process.cwd(), 500); // fetch all; viewport scrolls
+      _atView  = 0;
+      if (_atSel >= _atItems.length) _atSel = Math.max(0, _atItems.length - 1);
+      return _atItems.length > 0;
+    }
+
+    // Column of the readline cursor on the input line (visible prompt is 4 cols wide)
+    function atInputCol() { return 4 + (rl.cursor || 0); }
+
+    // Return the terminal cursor to the input line, `fromRows` lines above us.
+    // Uses RELATIVE moves so it survives the terminal scrolling when the picker
+    // is drawn near the bottom of the screen (the bug where the hint overlapped @).
+    function atMoveToInput(fromRows) {
+      if (fromRows > 0) process.stdout.write(`\x1b[${fromRows}A`);
+      process.stdout.write('\r');
+      const col = atInputCol();
+      if (col > 0) process.stdout.write(`\x1b[${col}C`);
+    }
+
+    function clearAtRows() {
+      if (_atRows > 0) {
+        for (let i = 0; i < _atRows; i++) process.stdout.write('\x1b[B\r\x1b[2K');
+        atMoveToInput(_atRows);
+        _atRows = 0;
+      }
+      _subRowCount = 0;
+    }
+
+    function renderAtList() {
+      clearAtRows();                       // assumes cursor is on the input line
+      const total = _atItems.length;
+      // Keep the selected item inside the visible window
+      if (_atSel < _atView)                    _atView = _atSel;
+      if (_atSel >= _atView + AT_MAX_VISIBLE)  _atView = _atSel - AT_MAX_VISIBLE + 1;
+      const end = Math.min(_atView + AT_MAX_VISIBLE, total);
+
+      const lines = [];
+      for (let i = _atView; i < end; i++) {
+        const it    = _atItems[i];
+        const label = it.isDir ? it.ref + '/' : it.ref;
+        const arrow = (i === end - 1 && end < total) ? c.dim(' ↓')
+                    : (i === _atView && _atView > 0) ? c.dim(' ↑') : '';
+        lines.push((i === _atSel
+          ? c.brand('❯ ') + c.bold(label)
+          : c.muted('  ') + c.white(label)) + arrow);
+      }
+      const pos = total > AT_MAX_VISIBLE ? `  ·  ${_atSel + 1}/${total}` : '';
+      lines.push(c.dim('↑↓ select · enter/tab insert · esc dismiss' + pos));
+
+      for (const ln of lines) process.stdout.write(`\x1b[B\r\x1b[2K  ${ln}`);
+      atMoveToInput(lines.length);         // relative — scroll-safe
+      _atRows      = lines.length;
+      _subRowCount = lines.length;
+    }
+
+    function openAtPicker() {
+      _atSel = 0;
+      if (!refreshAtItems()) return;
+      _atActive = true;
+      // Take over keypress handling from readline
+      _savedKp = process.stdin.listeners('keypress').slice();
+      process.stdin.removeAllListeners('keypress');
+      process.stdin.on('keypress', atKeyHandler);
+      renderAtList();
+    }
+
+    function closeAtPicker() {
+      if (!_atActive) return;
+      _atActive = false;
+      _atItems  = [];
+      _atSel    = 0;
+      if (_savedKp) {
+        process.stdin.removeListener('keypress', atKeyHandler);
+        for (const l of _savedKp) process.stdin.on('keypress', l);
+        _savedKp = null;
+      }
+      clearAtRows();
+    }
+
+    function acceptAt() {
+      const it = _atItems[_atSel];
+      if (!it) { closeAtPicker(); return; }
+      const insert  = it.isDir ? it.ref + '/' : it.ref;
+      const line    = rl.line;
+      const before  = line.slice(0, _atStart + 1);                 // up to & incl. '@'
+      const after   = line.slice(_atStart + 1 + _atToken.length);
+      const newLine = before + insert + after;
+      rl.line   = newLine;
+      rl.cursor = (before + insert).length;
+      rl._refreshLine();
+      if (it.isDir) {                  // drill into the folder, keep picking
+        _atSel = 0;
+        if (refreshAtItems()) { renderAtList(); return; }
+      }
+      closeAtPicker();
+    }
+
+    function atKeyHandler(ch, key) {
+      if (!key) return;
+      if (key.name === 'up')      { _atSel = (_atSel - 1 + _atItems.length) % _atItems.length; renderAtList(); return; }
+      if (key.name === 'down')    { _atSel = (_atSel + 1) % _atItems.length; renderAtList(); return; }
+      if (key.name === 'escape')  { closeAtPicker(); return; }
+      if (key.name === 'tab' || key.name === 'return' || key.name === 'enter') { acceptAt(); return; }
+      if (key.ctrl && key.name === 'c') { closeAtPicker(); process.exit(0); }
+      if (key.name === 'backspace') {
+        if (rl.cursor > 0) {
+          rl.line   = rl.line.slice(0, rl.cursor - 1) + rl.line.slice(rl.cursor);
+          rl.cursor = rl.cursor - 1;
+          rl._refreshLine();
+        }
+        if (!refreshAtItems()) { closeAtPicker(); return; }
+        renderAtList();
+        return;
+      }
+      // Printable character — insert it, keep filtering
+      if (ch && !key.ctrl && !key.meta && ch.length === 1 && ch >= ' ') {
+        rl.line   = rl.line.slice(0, rl.cursor) + ch + rl.line.slice(rl.cursor);
+        rl.cursor = rl.cursor + 1;
+        rl._refreshLine();
+        if (ch === ' ') { closeAtPicker(); return; }   // space ends the @token
+        if (!refreshAtItems()) { closeAtPicker(); return; }
+        renderAtList();
+      }
     }
 
     process.stdin.on('keypress', (ch, key) => {
@@ -1070,6 +1206,14 @@ async function startChat(opts = {}) {
       // Redraw sub-rows on every keypress so backspace / typing never wipes them
       _suggTimer = setTimeout(() => {
         _suggTimer = null;
+        // If the user just started an @file token, hand control to the picker
+        if (!_atActive) {
+          const t = currentAtToken();
+          if (t && fileRefSuggestions(t.token, process.cwd(), 1).length) {
+            openAtPicker();
+            return;
+          }
+        }
         renderSubRows(rl.line || '');
       }, 50);
     });
