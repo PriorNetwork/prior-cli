@@ -85,8 +85,13 @@ Prior will list the directory, check file sizes, and report back — all in one 
 
 ## Requirements
 
-- Node.js 16+
+- Node.js 16+ (npm install), **or** the standalone `prior.exe` — no Node needed
 - A [Prior Network](https://priornetwork.com) account
+
+## Maintainers
+
+See **[guide.md](guide.md)** for the release process — versioning, publishing to npm,
+building/attaching the standalone `prior.exe`, the self-updater, and the CI workflows.
 
 ## License
 
