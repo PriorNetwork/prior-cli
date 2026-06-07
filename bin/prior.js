@@ -170,6 +170,16 @@ const TOOL_HINTS = [
     hint: '[TOOL DIRECTIVE: You MUST call ip_lookup]',
   },
   {
+    tool: 'file_edit',
+    patterns: [
+      /\bedit\b/i, /\bmodify\b/i, /\bchange\b.*\b(file|function|line|code|return|value|variable)\b/i,
+      /\brefactor\b/i, /\brename\b.*\b(function|variable|method)\b/i,
+      /\bfix\b.*\b(bug|file|code|function|typo)\b/i, /\breplace\b.*\b(in|line|text|code)\b/i,
+      /\bupdate\b.*\b(file|function|code|line)\b/i,
+    ],
+    hint: '[TOOL DIRECTIVE: To change part of an existing file, you MUST use the <edit path="..."> tag with SEARCH/REPLACE markers — do NOT rewrite the whole file with <write>, and never say you cannot edit files]',
+  },
+  {
     tool: 'generate_image',
     patterns: [
       /\bgenerate\b/i, /\bcreate.*(image|picture|photo|illustration|art)\b/i,
@@ -189,6 +199,35 @@ function injectToolHint(text) {
     }
   }
   return text;
+}
+
+// ── @file context attachment ───────────────────────────────────
+// Expands  @path/to/file  references in a prompt into inline file context,
+// so the model sees the contents without a separate file_read round-trip.
+const MAX_ATTACH_BYTES = 256 * 1024;
+function expandFileRefs(input, cwd) {
+  const refRe = /(?:^|\s)@([^\s]+)/g;
+  const attached = [];
+  const seen = new Set();
+  let m;
+  while ((m = refRe.exec(input)) !== null) {
+    let ref = m[1].replace(/[.,;:)\]]+$/, ''); // trim trailing punctuation
+    if (!ref || seen.has(ref)) continue;
+    const resolved = (/^[a-zA-Z]:[/\\]/.test(ref) || path.isAbsolute(ref)) ? ref : path.resolve(cwd, ref);
+    try {
+      const stat = fs.statSync(resolved);
+      if (!stat.isFile() || stat.size > MAX_ATTACH_BYTES) continue;
+      const content = fs.readFileSync(resolved, 'utf8');
+      if (content.indexOf('\x00') !== -1) continue; // binary
+      attached.push({ ref, content, lines: content.split('\n').length });
+      seen.add(ref);
+    } catch { /* not a readable file — leave the @token as literal text */ }
+  }
+  if (!attached.length) return { message: input, attached };
+  const ctx = attached
+    .map(a => `--- Contents of ${a.ref} ---\n${a.content}`)
+    .join('\n\n');
+  return { message: `${input}\n\n[Attached file context]\n${ctx}`, attached };
 }
 
 function fmtElapsed(ms) {
@@ -852,7 +891,7 @@ async function startChat(opts = {}) {
   );
   console.log(accountBadge);
   console.log(c.muted(`  ${cwdShort}`));
-  console.log(c.ok('  ◉') + c.muted('  Agent mode  ') + c.dim('· file  web  shell  image  prior-network'));
+  console.log(c.ok('  ◉') + c.muted('  Agent mode  ') + c.dim('· read  edit  search  web  shell  image  ·  @file to attach'));
 
   console.log(DIVIDER);
   console.log(c.muted('  /help  /clear  /update  /compact  /timer  /save  /load  /saves  /delete  /exit'));
@@ -1250,7 +1289,7 @@ async function startChat(opts = {}) {
             banner();
             console.log(DIVIDER);
             console.log(c.brand('  Prior AI') + c.muted('  ·  ') + c.muted(`@${user}`));
-            console.log(c.ok('  ◉') + c.muted('  Agent mode  ') + c.dim('· file  web  shell  image  prior-network'));
+            console.log(c.ok('  ◉') + c.muted('  Agent mode  ') + c.dim('· read  edit  search  web  shell  image  ·  @file to attach'));
             console.log(DIVIDER);
             console.log('');
             return loop();
@@ -1640,6 +1679,13 @@ Be concise but thorough — this summary replaces the full history to save conte
           console.log(c.brand('  ◈') + c.dim(`  ${label} attached`));
         }
 
+        // Expand any @file references into inline context
+        const { message: expandedInput, attached } = expandFileRefs(input, process.cwd());
+        if (attached.length) {
+          console.log(c.brand('  ◈') + c.muted('  attached: ' +
+            attached.map(a => `${a.ref} (${a.lines} line${a.lines !== 1 ? 's' : ''})`).join(', ')));
+        }
+
         let responseText     = '';
         let _progressStarted = false;
         const _thinkStart    = Date.now();
@@ -1661,7 +1707,7 @@ Be concise but thorough — this summary replaces the full history to save conte
 
           _currentAbortController = new AbortController();
           await runAgent({
-            messages:       [...chatHistory, { role: 'user', content: injectToolHint(input) }],
+            messages:       [...chatHistory, { role: 'user', content: injectToolHint(expandedInput) }],
             model:          currentModel,
             cwd:            process.cwd(),
             projectContext,
@@ -1761,7 +1807,7 @@ Be concise but thorough — this summary replaces the full history to save conte
           _currentAbortController = null;
         }
 
-        chatHistory.push({ role: 'user', content: input });
+        chatHistory.push({ role: 'user', content: expandedInput });
         if (responseText) chatHistory.push({ role: 'assistant', content: responseText });
 
         process.stdout.write('\n');
@@ -1827,6 +1873,78 @@ program
   .description('Open Prior AI chat session (default when no command given)')
   .option('-m, --model <model>', 'Model to use')
   .action(opts => startChat(opts));
+
+// ── RUN (one-shot / non-interactive) ───────────────────────────
+program
+  .command('run [prompt...]')
+  .description('One-shot prompt — prints the answer and exits (scriptable, pipe-able)')
+  .option('-m, --model <model>', 'Model to use')
+  .option('-y, --yes',           'Auto-approve tool actions (run_command, file edits/writes)')
+  .option('-q, --quiet',         'Print only the final answer (suppress tool activity)')
+  .action(async (promptParts, opts) => {
+    requireAuth();
+
+    // Gather prompt from args + piped stdin
+    let prompt = (promptParts || []).join(' ').trim();
+    if (!process.stdin.isTTY) {
+      const piped = await new Promise(res => {
+        let buf = ''; process.stdin.setEncoding('utf8');
+        process.stdin.on('data', d => buf += d);
+        process.stdin.on('end', () => res(buf.trim()));
+        setTimeout(() => res(buf.trim()), 50); // no pipe → don't hang
+      });
+      if (piped) prompt = prompt ? `${prompt}\n\n${piped}` : piped;
+    }
+    if (!prompt) { console.error(c.err('  ✗ No prompt. Usage: prior run "your question"  (or pipe via stdin)')); process.exit(1); }
+
+    const cwd = process.cwd();
+    const { message, attached } = expandFileRefs(prompt, cwd);
+    if (attached.length && !opts.quiet) {
+      console.error(c.muted('  ◈ attached: ' + attached.map(a => a.ref).join(', ')));
+    }
+
+    // Load prior.md if present
+    let projectContext = null;
+    try { projectContext = fs.readFileSync(path.join(cwd, 'prior.md'), 'utf8'); } catch {}
+
+    let responseText = '';
+    let hadError     = false;
+    try {
+      await runAgent({
+        messages:       [{ role: 'user', content: injectToolHint(message) }],
+        model:          opts.model || null,
+        cwd,
+        projectContext,
+        confirm: async ({ name }) => {
+          if (opts.yes) return true;
+          console.error(c.warn(`  ⚠ Skipping ${name} — re-run with --yes to allow tool actions in one-shot mode.`));
+          return false;
+        },
+        send: ev => {
+          switch (ev.type) {
+            case 'tool_start':
+              if (!opts.quiet) console.error(c.dim(`  ◈ ${ev.name}`));
+              break;
+            case 'tool_error':
+              if (!opts.quiet) console.error(c.err(`  ✗ ${ev.name}: ${ev.error}`));
+              break;
+            case 'text':
+              if (ev.content) { process.stdout.write(ev.content); responseText += ev.content; }
+              break;
+            case 'error':
+              hadError = true;
+              console.error(c.err(`  ✗ ${ev.message}`));
+              break;
+          }
+        },
+      });
+    } catch (err) {
+      console.error(c.err(`  ✗ ${err.message}`));
+      process.exit(1);
+    }
+    if (responseText && !responseText.endsWith('\n')) process.stdout.write('\n');
+    process.exit(hadError ? 1 : 0);
+  });
 
 // ── IMAGINE ────────────────────────────────────────────────────
 program

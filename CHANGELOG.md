@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.7.11] - 2026-06-07
+- **Surgical file edits** — new `file_edit` tool with an `<edit>` SEARCH/REPLACE tag, so the agent modifies parts of a file instead of rewriting the whole thing
+- **Codebase search** — new `file_search` (grep across files, returns `path:line: match`) and `file_glob` (find files by `**/*.ext` pattern) tools
+- **One-shot mode** — `prior run "your prompt"` prints the answer and exits; scriptable and pipe-able (`cat file | prior run "summarize"`), with `--yes`, `--quiet`, `-m` flags
+- **`@file` attachments** — reference `@path/to/file` in any prompt to inline its contents as context, no separate read step
+
 ## [1.7.10] - 2026-06-07
 - Updated repository URLs to the new `PriorNetwork/prior-cli` GitHub org (repo moved)
 
