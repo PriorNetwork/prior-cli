@@ -15,6 +15,36 @@ const { renderMarkdown } = require('../lib/render');
 const { getToken, getUsername, saveAuth, clearAuth } = require('../lib/config');
 const { runAgent, CONFIRM_TOOLS } = require('../lib/agent');
 
+// ── Packaged-executable detection + self-update support ─────────
+// True when running as a bundled single-file binary (pkg) rather than via Node+npm.
+const _execBase = path.basename(process.execPath).toLowerCase();
+const IS_EXE   = !!process.pkg || (_execBase !== 'node.exe' && _execBase !== 'node');
+const GH_REPO  = 'PriorNetwork/prior-cli';
+
+// Best-effort cleanup of a leftover *.old.exe from a previous self-update.
+if (IS_EXE) {
+  try {
+    const oldExe = process.execPath.replace(/\.exe$/i, '') + '.old.exe';
+    if (fs.existsSync(oldExe)) fs.unlinkSync(oldExe);
+  } catch { /* still locked from last run — retry next launch */ }
+}
+
+// Download the latest release exe and swap it in (Windows lets us rename a
+// running exe, so: current → .old, downloaded → current; .old is deleted next launch).
+async function selfUpdateExe(assetUrl) {
+  const _fetch  = require('node-fetch');
+  const exePath = process.execPath;
+  const stem    = exePath.replace(/\.exe$/i, '');
+  const tmp     = stem + '.new.exe';
+  const old     = stem + '.old.exe';
+  const res = await _fetch(assetUrl, { timeout: 180000, redirect: 'follow', headers: { 'User-Agent': 'prior-cli' } });
+  if (!res.ok) throw new Error(`download HTTP ${res.status}`);
+  fs.writeFileSync(tmp, Buffer.from(await res.arrayBuffer()));
+  try { if (fs.existsSync(old)) fs.unlinkSync(old); } catch {}
+  fs.renameSync(exePath, old);   // rename the running exe out of the way
+  fs.renameSync(tmp, exePath);   // move the new build into place
+}
+
 function decodeToken(token) {
   try {
     const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
@@ -1649,6 +1679,49 @@ Keep it under 350 words. Write prior.md now.`;
             console.log('');
             process.stdout.write(c.dim('  Checking for updates…'));
             const _fetch = require('node-fetch');
+
+            // ── Standalone exe → self-update from GitHub Releases ──
+            if (IS_EXE) {
+              let _rel;
+              try {
+                const _r = await _fetch(`https://api.github.com/repos/${GH_REPO}/releases/latest`,
+                  { timeout: 8000, headers: { 'User-Agent': 'prior-cli', Accept: 'application/vnd.github+json' } });
+                if (!_r.ok) throw new Error(`HTTP ${_r.status}`);
+                _rel = await _r.json();
+              } catch (err) {
+                process.stdout.clearLine(0); process.stdout.cursorTo(0);
+                console.log(c.err(`  ✗ Could not reach GitHub Releases: ${err.message}\n`));
+                return loop();
+              }
+              const _ghLatest = (_rel.tag_name || '').replace(/^v/, '');
+              process.stdout.clearLine(0); process.stdout.cursorTo(0);
+              if (!_ghLatest || _ghLatest === version) {
+                console.log(c.ok('  ✓ Already up to date  ') + c.muted(`v${version}\n`));
+                return loop();
+              }
+              const _asset = (_rel.assets || []).find(a => /prior.*\.exe$/i.test(a.name));
+              if (!_asset) {
+                console.log(c.err('  ✗ Latest release has no .exe asset'));
+                console.log(c.muted(`  Get it manually: https://github.com/${GH_REPO}/releases/latest\n`));
+                return loop();
+              }
+              console.log(`  ${c.muted('Current :')} ${c.white(`v${version}`)}`);
+              console.log(`  ${c.muted('Latest  :')} ${c.bold(`v${_ghLatest}`)}`);
+              console.log('');
+              process.stdout.write(c.dim('  Downloading update…'));
+              try {
+                await selfUpdateExe(_asset.browser_download_url);
+                process.stdout.clearLine(0); process.stdout.cursorTo(0);
+                console.log(c.ok(`  ✓ Updated to v${_ghLatest}  `) + c.muted('restart prior to apply\n'));
+              } catch (err) {
+                process.stdout.clearLine(0); process.stdout.cursorTo(0);
+                console.log(c.err(`  ✗ Update failed: ${err.message}`));
+                console.log(c.muted(`  Download manually: https://github.com/${GH_REPO}/releases/latest\n`));
+              }
+              return loop();
+            }
+
+            // ── npm install → update via npm ──────────────────────
             let _latest;
             try {
               const _res  = await _fetch('https://registry.npmjs.org/prior-cli/latest', { timeout: 8000 });
@@ -2285,6 +2358,48 @@ program
     process.stdout.write(c.dim('  Checking for updates…'));
 
     const fetch = require('node-fetch');
+
+    // Standalone exe → self-update from GitHub Releases
+    if (IS_EXE) {
+      let rel;
+      try {
+        const r = await fetch(`https://api.github.com/repos/${GH_REPO}/releases/latest`,
+          { timeout: 8000, headers: { 'User-Agent': 'prior-cli', Accept: 'application/vnd.github+json' } });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        rel = await r.json();
+      } catch (err) {
+        clearLine();
+        console.error(c.err(`  ✗ Could not reach GitHub Releases: ${err.message}\n`));
+        return;
+      }
+      const ghLatest = (rel.tag_name || '').replace(/^v/, '');
+      clearLine();
+      if (!ghLatest || ghLatest === version) {
+        console.log(c.ok('  ✓ Already up to date  ') + c.muted(`v${version}\n`));
+        return;
+      }
+      const asset = (rel.assets || []).find(a => /prior.*\.exe$/i.test(a.name));
+      if (!asset) {
+        console.error(c.err('  ✗ Latest release has no .exe asset'));
+        console.error(c.muted(`  Get it manually: https://github.com/${GH_REPO}/releases/latest\n`));
+        return;
+      }
+      console.log(`  ${c.muted('Current :')} ${c.white(`v${version}`)}`);
+      console.log(`  ${c.muted('Latest  :')} ${c.bold(`v${ghLatest}`)}`);
+      console.log('');
+      process.stdout.write(c.dim('  Downloading update…'));
+      try {
+        await selfUpdateExe(asset.browser_download_url);
+        clearLine();
+        console.log(c.ok(`  ✓ Updated to v${ghLatest}  `) + c.muted('restart prior to apply\n'));
+      } catch (err) {
+        clearLine();
+        console.error(c.err(`  ✗ Update failed: ${err.message}`));
+        console.error(c.muted(`  Download manually: https://github.com/${GH_REPO}/releases/latest\n`));
+      }
+      return;
+    }
+
     let latest;
     try {
       const res  = await fetch('https://registry.npmjs.org/prior-cli/latest', { timeout: 8000 });

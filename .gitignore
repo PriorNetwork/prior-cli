@@ -1,3 +1,6 @@
 node_modules/
 *.log
 .env
+
+# Built executables (distributed via GitHub Releases, not committed)
+prior-build/

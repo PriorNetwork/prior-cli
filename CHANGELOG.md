@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.7.14] - 2026-06-07
+- **Standalone Windows executable** — `prior.exe` is now available from GitHub Releases, so users can run Prior without installing Node.js
+- **Self-updating exe** — `/update` (and `prior update`) detect when running as the standalone exe and update in place by downloading the latest release, instead of going through npm
+
 ## [1.7.13] - 2026-06-07
 - **`@file` autocomplete is now a real interactive picker** — ↑/↓ moves a highlighted selection, Enter/Tab inserts the path, Esc dismisses, and typing filters live (it takes over the keyboard while open so arrow keys no longer fall through to shell history)
 - Lists **files and folders together, alphabetically** (was folders-only when a directory had many subfolders); selecting a folder drills into it
