@@ -1,5 +1,8 @@
 # Changelog
 
+## [1.7.12] - 2026-06-07
+- **`@file` live autocomplete** — typing `@` now shows a dropdown of matching files/folders (dirs first, skips node_modules/dotfiles) and Tab completes the path, mirroring the slash-command menu
+
 ## [1.7.11] - 2026-06-07
 - **Surgical file edits** — new `file_edit` tool with an `<edit>` SEARCH/REPLACE tag, so the agent modifies parts of a file instead of rewriting the whole thing
 - **Codebase search** — new `file_search` (grep across files, returns `path:line: match`) and `file_glob` (find files by `**/*.ext` pattern) tools

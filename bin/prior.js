@@ -230,6 +230,30 @@ function expandFileRefs(input, cwd) {
   return { message: `${input}\n\n[Attached file context]\n${ctx}`, attached };
 }
 
+// Live completions for an @file token being typed. `partial` is the text
+// after @ (e.g. "lib/to").  Returns up to `limit` matches, dirs first.
+const REF_SKIP_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', '.cache', 'coverage', 'vendor']);
+function fileRefSuggestions(partial, cwd, limit = 6) {
+  const slash   = Math.max(partial.lastIndexOf('/'), partial.lastIndexOf('\\'));
+  const dirPart = slash >= 0 ? partial.slice(0, slash) : '';
+  const prefix  = (slash >= 0 ? partial.slice(slash + 1) : partial).toLowerCase();
+  const baseDir = dirPart
+    ? (path.isAbsolute(dirPart) ? dirPart : path.resolve(cwd, dirPart))
+    : cwd;
+  let entries;
+  try { entries = fs.readdirSync(baseDir, { withFileTypes: true }); } catch { return []; }
+  const out = [];
+  for (const e of entries) {
+    if (e.name.startsWith('.') && !prefix.startsWith('.')) continue;   // hide dotfiles unless asked
+    if (e.isDirectory() && REF_SKIP_DIRS.has(e.name)) continue;
+    if (!e.name.toLowerCase().startsWith(prefix)) continue;
+    const ref = (dirPart ? dirPart.replace(/\\/g, '/') + '/' : '') + e.name;
+    out.push({ ref, isDir: e.isDirectory() });
+  }
+  out.sort((a, b) => (a.isDir === b.isDir ? a.ref.localeCompare(b.ref) : a.isDir ? -1 : 1));
+  return out.slice(0, limit);
+}
+
 function fmtElapsed(ms) {
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s`;
@@ -863,6 +887,13 @@ async function startChat(opts = {}) {
     terminal: true,
     historySize: 100,
     completer: line => {
+      // @file completion — complete the @token at the end of the line
+      const at = line.match(/(?:^|\s)@([^\s]*)$/);
+      if (at) {
+        const matches = fileRefSuggestions(at[1], process.cwd(), 20)
+          .map(s => '@' + (s.isDir ? s.ref + '/' : s.ref));
+        return [matches, '@' + at[1]];
+      }
       const cmds = ['/help', '/clear', '/censored', '/uncensored', '/login', '/logout', '/exit'];
       if (!line.startsWith('/')) return [[], line];
       const hits = cmds.filter(cmd => cmd.startsWith(line));
@@ -968,6 +999,22 @@ async function startChat(opts = {}) {
         const matches = SLASH_CMDS.filter(({ cmd }) => cmd.startsWith(word));
         for (const { cmd, desc } of matches) {
           process.stdout.write(`\x1b[B\r\x1b[2K${c.brand('  ' + cmd.padEnd(14))}${c.dim(desc)}`);
+          rows++;
+        }
+      }
+
+      // @file completions — when the token at the end of the line starts with @
+      const atMatch = (line || '').match(/(?:^|\s)@([^\s]*)$/);
+      if (atMatch) {
+        const sugg = fileRefSuggestions(atMatch[1], process.cwd());
+        for (const s of sugg) {
+          const label = s.isDir ? s.ref + '/' : s.ref;
+          const icon  = s.isDir ? '📁' : '📄';
+          process.stdout.write(`\x1b[B\r\x1b[2K  ${c.brand('@')}${c.white(label.padEnd(30))}${c.dim(icon)}`);
+          rows++;
+        }
+        if (sugg.length) {
+          process.stdout.write(`\x1b[B\r\x1b[2K  ${c.dim('tab to complete  ·  attaches file contents as context')}`);
           rows++;
         }
       }
